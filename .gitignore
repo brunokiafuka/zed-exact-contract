@@ -1,0 +1,7 @@
+/target/
+/grammars/
+/extension.wasm
+/grammar/build/
+/grammar/node_modules/
+*.wasm
+.DS_Store

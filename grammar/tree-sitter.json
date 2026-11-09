@@ -1,0 +1,6 @@
+{
+  "grammars": [
+    { "name": "contract", "camelcase": "Contract", "scope": "source.contract", "path": ".", "file-types": ["contract"] }
+  ],
+  "metadata": { "version": "0.1.0", "license": "MIT", "description": "Exact Contract grammar for tree-sitter", "links": { "repository": "https://github.com/expo/exact" } }
+}
