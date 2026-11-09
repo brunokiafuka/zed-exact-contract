@@ -1,0 +1,18 @@
+id = "exact-contract"
+name = "Exact Contract"
+version = "0.1.0"
+schema_version = 1
+authors = ["Bruno Kiafuka"]
+description = "Exact Contract (.contract): highlighting, outline, and a language server backed by the Contract compiler."
+repository = "https://github.com/brunokiafuka/zed-exact-contract"
+
+# Zed builds the grammar from this commit of this repository, not from the working
+# tree: after changing grammar/, commit and set rev to that commit.
+[grammars.contract]
+repository = "https://github.com/brunokiafuka/zed-exact-contract"
+rev = "6fa8e96fc56fbe7b62e02a653434774e651927d8"
+path = "grammar"
+
+[language_servers.contract-lsp]
+name = "Contract LSP"
+languages = ["Contract"]

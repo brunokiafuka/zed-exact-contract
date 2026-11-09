@@ -23,8 +23,9 @@ rather than to restate it.
 
 1. Build the Contract compiler once, in your Exact checkout or app:
    `bun exact.mjs contract build app.contract`.
-2. In Zed, run **zed: install dev extension** from the command palette and choose this
-   folder. Zed compiles the grammar and the extension; Rust must be installed with rustup.
+2. Clone this repository.
+3. In Zed, run **zed: install dev extension** from the command palette and choose the
+   cloned folder. Zed compiles the grammar and the extension; Rust must be installed with rustup.
 
 The server finds the compiler from the file you open: inside an Exact checkout it is
 `target/debug/contract`; in an app made by `exact new` it follows `exact.mjs` to the
@@ -62,8 +63,9 @@ node test/lsp.test.mjs ../weatherlight                     # drive the server ag
 test/highlight-dump.py some.contract 1 20                  # see how each token is coloured
 ```
 
-After changing `grammar/`, commit it and set `rev` in `extension.toml` to that commit:
-Zed builds the grammar from the commit, not from the working tree.
+After changing `grammar/`, commit and push it, and set `rev` in `extension.toml` to that
+commit: Zed builds the grammar from the commit it fetches, not from the working tree. To
+try a grammar change before pushing, point `repository` at a `file://` URL of your clone.
 
 ## Limits
 
