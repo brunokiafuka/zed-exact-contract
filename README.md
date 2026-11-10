@@ -51,6 +51,11 @@ checkout (`EXACT2`, default `../exact`). To name it yourself, in Zed's settings:
 - **The server holds no knowledge of the language.** It runs the compiler and
   translates. It reads files from disk, so diagnostics and navigation follow each save,
   not each keystroke. Formatting does use the unsaved buffer.
+- **Names resolve while there is an error.** From Exact `d42b9c1a`, `contract symbols` prints
+  what it can still resolve when the program has an error, and the server uses it. A file that
+  cannot be parsed drops out of that output, so its names are carried from its last version that
+  parsed, and hover says so. With an older compiler the last table is kept instead. Either way an
+  entry answers only if its name is still the text at its position: no answer, never a wrong one.
 - **No dependencies.** The server is one script, embedded in the extension and run on
   the Node that Zed manages.
 
@@ -60,6 +65,7 @@ checkout (`EXACT2`, default `../exact`). To name it yourself, in Zed's settings:
 scripts/gen-highlights.py ../exact/target/debug/contract   # refresh the tag and command lists
 cd grammar && tree-sitter generate                         # after editing grammar.js
 node test/lsp.test.mjs ../weatherlight                     # drive the server against a real app
+node test/partial.test.mjs ../exact/target/debug/contract  # navigation while the program has errors
 test/highlight-dump.py some.contract 1 20                  # see how each token is coloured
 ```
 
@@ -70,5 +76,8 @@ try a grammar change before pushing, point `repository` at a `file://` URL of yo
 ## Limits
 
 - No nested outline: the grammar does not track indentation, so the outline is flat.
-- Diagnostics describe the saved files. An unsaved edit is not checked until saved.
+- Diagnostics describe the saved files. An unsaved edit is not checked until saved: the compiler
+  reads from disk, and whether it will take unsaved text is undecided upstream (expo/exact#21).
+- Hover for a style attribute shows the compiler's row and a link to CSS's reference; the
+  vocabulary carries no descriptions.
 - Rename is not offered.

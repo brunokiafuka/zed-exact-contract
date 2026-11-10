@@ -197,18 +197,51 @@ async function refresh(state) {
     for (const [file, list] of byFile) notify('textDocument/publishDiagnostics', { uri: uriOf(file), diagnostics: list });
     state.published = new Set(byFile.keys());
 
-    if (symbols.code === 0) {
-      try {
-        const parsed = JSON.parse(symbols.stdout);
-        for (const list of [parsed.definitions, parsed.references]) for (const entry of list) entry.file = absolute(state, entry.file);
-        parsed.lines = lineCache;
-        state.symbols = parsed;
-      } catch { /* keep the last good symbols */ }
+    // `symbols` on a program with errors (exit 1) still prints what it can resolve, with an
+    // `errors` array; an older compiler prints nothing, and the last table is kept.
+    let parsed = null;
+    try { parsed = JSON.parse(symbols.stdout); } catch { /* keep the last table */ }
+    if (parsed?.definitions && parsed?.references) {
+      for (const list of [parsed.definitions, parsed.references, parsed.errors ?? []]) for (const entry of list) entry.file = absolute(state, entry.file);
+      const empty = !parsed.definitions.length && !parsed.references.length;
+      // A root that cannot be parsed gives empty arrays: nothing to learn from, so nothing changes.
+      if (symbols.code === 0 || !empty) state.symbols = symbols.code === 0 ? parsed : withUnparsedFiles(state.symbols, parsed);
     }
+    // A table that is kept is still read against the files as they are now.
+    if (state.symbols) state.symbols.lines = lineCache;
   } finally {
     state.running = false;
     if (state.again) { state.again = false; schedule(state.path, 50); }
   }
+}
+
+/** A partial table, plus the last known symbols of each file that has dropped out of it.
+ * A file that cannot be parsed contributes nothing to the compiler's partial output, so its
+ * names would stop resolving exactly while it is being fixed. Its previous entries are carried,
+ * marked `stale`, until it parses again; a file the compiler still resolves is never carried. */
+function withUnparsedFiles(previous, partial) {
+  if (!previous) return partial;
+  const live = new Set();
+  for (const list of [partial.definitions, partial.references]) for (const entry of list) live.add(entry.file);
+  const dropped = new Set((partial.errors ?? []).map((e) => e.file).filter((file) => file && !live.has(file)));
+  if (!dropped.size) return partial;
+
+  const key = (d) => [d.file, d.kind, d.name, d.component ?? d.owner ?? ''].join('\0');
+  const definitions = [...partial.definitions], references = [...partial.references];
+  const known = new Map(definitions.map((d, i) => [key(d), i]));
+  const moved = new Map();                                   // an index in `previous` -> its index here
+  previous.definitions.forEach((d, i) => {
+    if (known.has(key(d))) moved.set(i, known.get(key(d)));
+    else if (dropped.has(d.file)) { moved.set(i, definitions.length); definitions.push({ ...d, stale: true }); }
+  });
+  const taken = new Set(references.map((r) => `${r.file}:${r.line}:${r.col}`));
+  for (const r of previous.references) {
+    const to = moved.get(r.to);
+    if (to === undefined || taken.has(`${r.file}:${r.line}:${r.col}`)) continue;
+    // Carried: a reference inside a dropped file, or one elsewhere to a name a dropped file declares.
+    if (dropped.has(r.file) || definitions[to].stale) references.push({ ...r, to, stale: true });
+  }
+  return { ...partial, definitions, references };
 }
 
 async function loadVocab(compiler) {
@@ -227,7 +260,9 @@ async function loadVocab(compiler) {
     for (const h of raw.html ?? []) add(h.name, `**${h.name}** · HTML name${h.hint ? `\n\n${h.hint}` : ''}`);
     for (const a of raw.attributes ?? []) {
       const rows = (a.rows ?? []).map((r) => `- \`${r.row}\`: ${r.codec}${r.default != null ? `, default \`${r.default}\`` : ''}${r.values?.length ? ` · ${r.values.map((v) => `\`${v}\``).join(' ')}` : ''}`);
-      add(a.name, [`**${a.name}** · ${a.kind} attribute`, rows.join('\n')].filter(Boolean).join('\n\n'));
+      // Exact's style names are CSS's, so CSS's own reference describes them; the vocabulary gives only rows.
+      const css = ['style', 'shorthand', 'flex'].includes(a.kind) && /^[a-z]/.test(a.name) ? `[\`${a.name}\` on MDN](https://developer.mozilla.org/docs/Web/CSS/${a.name})` : null;
+      add(a.name, [`**${a.name}** · ${a.kind} attribute`, rows.join('\n'), css].filter(Boolean).join('\n\n'));
     }
     for (const c of raw.contextual ?? []) add(c.name, `**${c.name}** · attribute, only on ${c.only}`);
     for (const r of raw.renamed ?? []) add(r.name, `**${r.name}** was renamed: use \`${r.use}\``);
@@ -256,9 +291,19 @@ function symbolAt(state, path, position) {
   if (!symbols) return null;
   const lines = diskLines(path, symbols.lines);
   const line = position.line + 1, col = charToByteCol(lines[position.line], position.character);
-  const hit = (entry) => entry.file === path && entry.line === line && entry.col <= col && col <= entry.end_col && entry.end_col > entry.col;
+  // The table describes the files as last compiled. Where a file has moved on since (an edit
+  // saved while the program has an error), an entry answers only if its name is still the
+  // text at its position: no answer rather than a wrong one.
+  const still = (entry) => {
+    const text = diskLines(entry.file, symbols.lines)[entry.line - 1] ?? '';
+    return Buffer.from(text, 'utf8').subarray(entry.col - 1, entry.end_col - 1).toString('utf8') === entry.name;
+  };
+  const hit = (entry) => entry.file === path && entry.line === line && entry.col <= col && col <= entry.end_col && entry.end_col > entry.col && still(entry);
   const reference = symbols.references.find(hit);
-  if (reference) return { index: reference.to, definition: symbols.definitions[reference.to], at: reference };
+  if (reference) {
+    const definition = symbols.definitions[reference.to];
+    return definition && (definition.end_col <= definition.col || still(definition)) ? { index: reference.to, definition, at: reference } : null;
+  }
   const index = symbols.definitions.findIndex(hit);
   if (index >= 0) return { index, definition: symbols.definitions[index], at: symbols.definitions[index] };
   return null;
@@ -281,6 +326,7 @@ function describe(definition) {
   if (definition.writes?.length) parts.push(`Writes: ${definition.writes.map((w) => `\`${w}\``).join(', ')}`);
   if (definition.reads?.length) parts.push(`Reads: ${definition.reads.map((w) => `\`${w}\``).join(', ')}`);
   if (definition.file && !definition.file.endsWith('.contract')) parts.push(`From \`${basename(dirname(definition.file))}\``);
+  if (definition.stale) parts.push(`_From the last version of \`${basename(definition.file)}\` that parsed._`);
   return parts.join('\n\n');
 }
 
