@@ -150,9 +150,10 @@ function rootState(rootPath) {
     roots.set(rootPath, state);
   }
   if (state.compiler === undefined || (state.compiler && !existsSync(state.compiler))) state.compiler = compilerFor(rootPath);
-  if (!state.compiler && !warned.has(rootPath)) {
+  // Said once a session, however many apps are open: highlighting and the outline need no compiler.
+  if (!state.compiler && !warned.size) {
     warned.add(rootPath);
-    notify('window/showMessage', { type: 2, message: 'Contract: no compiler found. Build it once in your exact checkout (`bun exact.mjs contract build app.contract`), or set lsp.contract-lsp.initialization_options.contractPath.' });
+    notify('window/showMessage', { type: 3, message: 'Contract: highlighting works, but diagnostics and navigation need the Contract compiler, and none was found. Build it once in your Exact checkout (`bun exact.mjs contract build app.contract`), or set lsp.contract-lsp.initialization_options.contractPath. See https://github.com/brunokiafuka/zed-exact-contract#install' });
   }
   return state;
 }

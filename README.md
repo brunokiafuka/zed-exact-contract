@@ -21,11 +21,15 @@ rather than to restate it.
 
 ## Install
 
-1. Build the Contract compiler once, in your Exact checkout or app:
-   `bun exact.mjs contract build app.contract`.
-2. Clone this repository.
-3. In Zed, run **zed: install dev extension** from the command palette and choose the
-   cloned folder. Zed compiles the grammar and the extension; Rust must be installed with rustup.
+In Zed, open the extensions view (**zed: extensions**), search for **Exact Contract** and
+install it. Highlighting and the outline work at once.
+
+Diagnostics, navigation, hover and formatting come from the Contract compiler, which the
+extension does not ship. Build it once, in your Exact checkout or app:
+`bun exact.mjs contract build app.contract`. Without it you get one message and highlighting only.
+
+To work on the extension itself, clone this repository and run **zed: install dev extension**
+on the cloned folder. Zed compiles the grammar and the extension; Rust must be installed with rustup.
 
 The server finds the compiler from the file you open: inside an Exact checkout it is
 `target/debug/contract`; in an app made by `exact new` it follows `exact.mjs` to the
@@ -56,8 +60,9 @@ checkout (`EXACT2`, default `../exact`). To name it yourself, in Zed's settings:
   cannot be parsed drops out of that output, so its names are carried from its last version that
   parsed, and hover says so. With an older compiler the last table is kept instead. Either way an
   entry answers only if its name is still the text at its position: no answer, never a wrong one.
-- **No dependencies.** The server is one script, embedded in the extension and run on
-  the Node that Zed manages.
+- **No dependencies.** The server is one script. The extension downloads it from this
+  repository's latest release and runs it on the Node that Zed manages. Offline, the copy
+  from an earlier session is used.
 
 ## Keeping up with the language
 
@@ -66,12 +71,18 @@ scripts/gen-highlights.py ../exact/target/debug/contract   # refresh the tag and
 cd grammar && tree-sitter generate                         # after editing grammar.js
 node test/lsp.test.mjs ../weatherlight                     # drive the server against a real app
 node test/partial.test.mjs ../exact/target/debug/contract  # navigation while the program has errors
+node test/nocompiler.test.mjs                              # one message and no errors without a compiler
 test/highlight-dump.py some.contract 1 20                  # see how each token is coloured
 ```
 
 After changing `grammar/`, commit and push it, and set `rev` in `extension.toml` to that
 commit: Zed builds the grammar from the commit it fetches, not from the working tree. To
 try a grammar change before pushing, point `repository` at a `file://` URL of your clone.
+
+The server ships as a release asset, not inside the extension. After changing
+`server/contract-lsp.mjs`, publish a release that carries it:
+`gh release create v0.1.1 server/contract-lsp.mjs`. Installed copies pick it up on their next start.
+To run a local copy instead, set `lsp.contract-lsp.binary` to `node` with the script's path as its argument.
 
 ## Limits
 
