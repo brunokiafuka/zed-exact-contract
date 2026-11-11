@@ -12,7 +12,7 @@ rather than to restate it.
 | | From |
 |---|---|
 | Highlighting, outline, bracket matching, comment toggling | `grammar/` and `languages/contract/` |
-| Diagnostics with the compiler's ids, on open and on save | `contract build --json` |
+| Diagnostics with the compiler's ids, on open and on save, and as you type in `app.contract` | `contract build --json`, `--stdin` |
 | Go to definition and find references, across files and `members` files | `contract symbols` |
 | Hover: what a name is, what an action writes; docs for tags, attributes, functions | `contract symbols`, `contract vocab --json` |
 | Format document | `contract fmt --stdout` |
@@ -53,8 +53,9 @@ checkout (`EXACT2`, default `../exact`). To name it yourself, in Zed's settings:
   tag in the language never breaks a parse; at worst it is uncoloured until the lists
   are refreshed. It parses all 765 `.contract` files in the Exact repository without an error.
 - **The server holds no knowledge of the language.** It runs the compiler and
-  translates. It reads files from disk, so diagnostics and navigation follow each save,
-  not each keystroke. Formatting does use the unsaved buffer.
+  translates. From Exact `85c59b40` the compiler takes unsaved text for the file it is given,
+  so `app.contract` is checked as you type. Every other file is read from disk, so its
+  diagnostics and navigation follow each save. Formatting always uses the unsaved buffer.
 - **Names resolve while there is an error.** From Exact `d42b9c1a`, `contract symbols` prints
   what it can still resolve when the program has an error, and the server uses it. A file that
   cannot be parsed drops out of that output, so its names are carried from its last version that
@@ -71,6 +72,7 @@ scripts/gen-highlights.py ../exact/target/debug/contract   # refresh the tag and
 cd grammar && tree-sitter generate                         # after editing grammar.js
 node test/lsp.test.mjs ../weatherlight                     # drive the server against a real app
 node test/partial.test.mjs ../exact/target/debug/contract  # navigation while the program has errors
+node test/unsaved.test.mjs ../exact/target/debug/contract  # the root is checked before it is saved
 node test/nocompiler.test.mjs                              # one message and no errors without a compiler
 test/highlight-dump.py some.contract 1 20                  # see how each token is coloured
 ```
@@ -87,8 +89,10 @@ To run a local copy instead, set `lsp.contract-lsp.binary` to `node` with the sc
 ## Limits
 
 - No nested outline: the grammar does not track indentation, so the outline is flat.
-- Diagnostics describe the saved files. An unsaved edit is not checked until saved: the compiler
-  reads from disk, and whether it will take unsaved text is undecided upstream (expo/exact#21).
+- Only `app.contract` is checked before it is saved. `contract build --stdin` replaces the
+  file it is given, and only the root of an app can be given: a component or `members` file
+  is not a program by itself. Those files are checked on save. With a compiler older than
+  `85c59b40` every file is checked on save.
 - Hover for a style attribute shows the compiler's row and a link to CSS's reference; the
   vocabulary carries no descriptions.
 - Rename is not offered.

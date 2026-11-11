@@ -14,9 +14,9 @@
 // No dependencies. Runs on Node 18+ (or Bun).
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve, join, basename, isAbsolute } from 'node:path';
+import { dirname, resolve, join, basename, isAbsolute, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------- transport
@@ -135,12 +135,25 @@ function compilerFor(rootPath) {
   return null;
 }
 
-function run(binary, args, cwd) {
+/** Run the compiler. `input`, when given, is written to its stdin. */
+function run(binary, args, cwd, input) {
   return new Promise((done) => {
-    execFile(binary, args, { cwd, maxBuffer: 256 * 1024 * 1024, timeout: 30000 }, (error, stdout, stderr) => {
+    const child = execFile(binary, args, { cwd, maxBuffer: 256 * 1024 * 1024, timeout: 30000 }, (error, stdout, stderr) => {
       done({ code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: stdout ?? '', stderr: stderr ?? '' });
     });
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(input ?? '');
   });
+}
+
+/** Whether this compiler reads the named file from stdin (exact 85c59b40 and later): its usage says so. */
+const takesStdin = new Map();
+async function readsStdin(compiler) {
+  if (!takesStdin.has(compiler)) {
+    const usage = await run(compiler, ['symbols'], dirname(compiler));
+    takesStdin.set(compiler, /--stdin/.test(usage.stdout + usage.stderr));
+  }
+  return takesStdin.get(compiler);
 }
 
 function rootState(rootPath) {
@@ -158,7 +171,14 @@ function rootState(rootPath) {
   return state;
 }
 
-const absolute = (state, file) => (file == null ? state.path : isAbsolute(file) ? file : resolve(state.dir, file));
+/** A file as the compiler names it, in the editor's spelling. The compiler resolves symlinks in the
+ * files an app uses, so under a linked folder its path is put back under the one the editor opened. */
+function absolute(state, file) {
+  if (file == null) return state.path;
+  if (!isAbsolute(file)) return resolve(state.dir, file);
+  if (state.real === undefined) { try { state.real = realpathSync(state.dir); } catch { state.real = state.dir; } }
+  return state.real !== state.dir && file.startsWith(state.real + sep) ? join(state.dir, file.slice(state.real.length + 1)) : file;
+}
 
 function schedule(rootPath, delay = 120) {
   const state = rootState(rootPath);
@@ -167,19 +187,27 @@ function schedule(rootPath, delay = 120) {
   state.timer = setTimeout(() => refresh(state), delay);
 }
 
-/** Compile the app from disk: publish its diagnostics, and keep its symbols when it compiles. */
+/** Compile the app: publish its diagnostics, and keep its symbols when it compiles. Files are read
+ * from disk, except the root while it is open: `--stdin` gives the compiler its unsaved text. It
+ * replaces only the file that is named, and only the root can be named, so the other files of an
+ * app are checked as saved. */
 async function refresh(state) {
   if (state.running) { state.again = true; return; }
   state.running = true;
   try {
+    state.stdin = await readsStdin(state.compiler);
+    const buffer = state.stdin ? documents.get(uriOf(state.path)) : undefined;
+    const unsaved = buffer === undefined ? [] : ['--stdin'];
     const [build, symbols] = await Promise.all([
-      run(state.compiler, ['build', state.path, '--json'], state.dir),
-      run(state.compiler, ['symbols', state.path], state.dir),
+      run(state.compiler, ['build', state.path, '--json', ...unsaved], state.dir, buffer),
+      run(state.compiler, ['symbols', state.path, ...unsaved], state.dir, buffer),
     ]);
     let diagnostics = [];
     try { diagnostics = JSON.parse(build.stdout || '[]'); } catch { log(`build printed no JSON: ${build.stderr.slice(0, 300)}`); }
     state.diagnostics = diagnostics;
     const lineCache = new Map(), byFile = new Map();
+    // The root's positions are in the text the compiler was given.
+    if (buffer !== undefined) lineCache.set(state.path, buffer.split('\n'));
     for (const d of diagnostics) {
       const file = absolute(state, d.file);
       if (!byFile.has(file)) byFile.set(file, []);
@@ -373,9 +401,17 @@ const handlers = {
   'textDocument/didChange'({ textDocument, contentChanges }) {
     const last = contentChanges[contentChanges.length - 1];
     if (last && typeof last.text === 'string') documents.set(textDocument.uri, last.text);
+    // The root is checked as it is typed, where the compiler takes unsaved text.
+    const path = pathOf(textDocument.uri), root = rootFor(path);
+    if (path === root && rootState(root).stdin !== false) schedule(root, 250);
   },
   'textDocument/didSave'({ textDocument }) { schedule(rootFor(pathOf(textDocument.uri))); },
-  'textDocument/didClose'({ textDocument }) { documents.delete(textDocument.uri); },
+  'textDocument/didClose'({ textDocument }) {
+    documents.delete(textDocument.uri);
+    // A root closed without saving is checked as saved again.
+    const path = pathOf(textDocument.uri), root = rootFor(path);
+    if (path === root && roots.get(root)?.stdin) schedule(root);
+  },
   'workspace/didChangeWatchedFiles'({ changes }) {
     for (const change of changes ?? []) if (change.uri.endsWith('.contract')) schedule(rootFor(pathOf(change.uri)));
   },
