@@ -5,3 +5,4 @@
 /grammar/node_modules/
 *.wasm
 .DS_Store
+/extensions/
